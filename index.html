@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pannello Qui</title>
+<meta name="theme-color" content="#f6f7f9">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5e6675; --line: #e3e6eb;
+    --ok: #1a7f45; --ok-bg: #e6f4ec; --warn: #9a5b00; --warn-bg: #fdf1dc;
+    --ko: #b42318; --ko-bg: #fdeaea; --idle: #5e6675; --idle-bg: #eef0f3; --link: #2457c5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b1f27; --text: #e8eaee; --muted: #9aa2b1; --line: #2b313c;
+      --ok: #5fd08e; --ok-bg: #173325; --warn: #f2b65a; --warn-bg: #3a2c12;
+      --ko: #ff8a80; --ko-bg: #3d1c1c; --idle: #9aa2b1; --idle-bg: #262b35; --link: #8ab0ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 16px; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .agg { color: var(--muted); font-size: .9rem; }
+  button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--card); color: var(--text); cursor: pointer; margin-left: auto; }
+  .riepilogo { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .pill { padding: 4px 12px; border-radius: 999px; font-weight: 600; font-size: .9rem; }
+  .ok { color: var(--ok); background: var(--ok-bg); }
+  .warn { color: var(--warn); background: var(--warn-bg); }
+  .ko { color: var(--ko); background: var(--ko-bg); }
+  .idle { color: var(--idle); background: var(--idle-bg); }
+  .griglia { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .app { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+         border-left-width: 5px; }
+  .app.s-ok { border-left-color: var(--ok); }
+  .app.s-warn { border-left-color: var(--warn); }
+  .app.s-ko { border-left-color: var(--ko); }
+  .app.s-idle { border-left-color: var(--line); }
+  .testa { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  h2 { font-size: 1.1rem; margin: 0; }
+  .stato { font-size: .8rem; padding: 2px 10px; border-radius: 999px; font-weight: 600; white-space: nowrap; }
+  .giro { color: var(--muted); font-size: .85rem; margin: 2px 0 8px; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: .92rem; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  .msg { margin-top: 8px; font-size: .9rem; }
+  .link { margin-top: 10px; font-size: .88rem; display: flex; gap: 14px; flex-wrap: wrap; }
+  a { color: var(--link); }
+  footer { margin-top: 24px; color: var(--muted); font-size: .82rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Pannello Qui</h1>
+    <span class="agg" id="quando">Caricamento…</span>
+    <button id="ricarica" type="button">Aggiorna</button>
+  </header>
+  <div class="riepilogo" id="riepilogo"></div>
+  <div class="griglia" id="griglia"></div>
+  <footer>
+    Le date sono in ora italiana. Il pannello legge i dati pubblicati da ogni app (dati/indice.json) e l'esito
+    dell'ultimo scaricamento su GitHub Actions. Si aggiorna da solo ogni 15 minuti.
+  </footer>
+</main>
+<script>
+"use strict";
+const UTENTE = "quivicino";
+const SITO = location.hostname.endsWith("github.io") ? location.origin + "/" : "https://quivicino.github.io/";
+const API = "https://api.github.com/repos/" + UTENTE + "/";
+const ORA = 3600e3, GIORNO = 24 * ORA;
+
+// Ogni app: dove trovare la data dei dati e quanto possono invecchiare prima di essere "da controllare".
+const APP = [
+  { id: "Distributori", nome: "Qui-Distributori", cosa: "Prezzi carburanti (MIMIT)", ritmo: "3 volte al giorno",
+    indice: "dati/indice.json", pianoB: true },
+  { id: "Colonnine", nome: "Qui-Colonnine", cosa: "Punti di ricarica (PUN)", ritmo: "3 volte al giorno",
+    indice: "dati/indice.json", massimo: 30 * ORA },
+  { id: "Rifiuti", nome: "Qui-Rifiuti", cosa: "Punti di raccolta (OpenStreetMap)", ritmo: "3 volte al giorno",
+    indice: "dati/indice.json", massimo: 30 * ORA },
+  { id: "Pets", nome: "Qui-Pets", cosa: "Servizi per animali (OSM + Overture)", ritmo: "ogni giorno",
+    indice: "dati/indice.json", massimo: 30 * ORA },
+  { id: "Salus", nome: "Qui-Salus", cosa: "Servizi sanitari (OpenStreetMap)", ritmo: "ogni giorno",
+    indice: "dati/indice.json", massimo: 30 * ORA },
+  { id: "Trekking", nome: "Qui-Trekking", cosa: "Sentieri della Lombardia (OSM)", ritmo: "ogni lunedì",
+    indice: "dati/indice.json", massimo: 8 * GIORNO },
+  { id: "Parking", nome: "Qui-Parking", cosa: "Parcheggi e ZTL della Lombardia", ritmo: "ogni lunedì",
+    indice: "osm/indice.json", ztl: "ztl.json", massimo: 8 * GIORNO },
+];
+
+const fmt = new Intl.DateTimeFormat("it-IT", { timeZone: "Europe/Rome", weekday: "short", day: "numeric",
+  month: "short", hour: "2-digit", minute: "2-digit" });
+const fmtGiorno = new Intl.DateTimeFormat("it-IT", { timeZone: "Europe/Rome", weekday: "short", day: "numeric", month: "short" });
+const giornoRoma = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" }).format(d);
+const quando = (iso) => iso ? fmt.format(new Date(iso)) : "—";
+function fa(iso) {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < ORA) return "da " + Math.max(1, Math.round(ms / 60e3)) + " min";
+  if (ms < 2 * GIORNO) return "da " + Math.round(ms / ORA) + " ore";
+  return "da " + Math.round(ms / GIORNO) + " giorni";
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function json(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) { const e = new Error("HTTP " + r.status); e.status = r.status; throw e; }
+  return r.json();
+}
+
+// Ultimo giro di scaricamento (programmato o col pulsante) e ultimo giro in assoluto.
+async function giri(id) {
+  const d = await json(API + id + "/actions/workflows/pubblica.yml/runs?per_page=15");
+  const tutti = d.workflow_runs || [];
+  return {
+    scarico: tutti.find((r) => r.event === "schedule" || r.event === "workflow_dispatch") || null,
+    manuali: tutti.filter((r) => r.event === "workflow_dispatch"),
+  };
+}
+
+function esitoGiro(r) {
+  if (!r) return { cl: "idle", testo: "nessun giro trovato" };
+  if (r.status !== "completed") return { cl: "idle", testo: "in corso" };
+  if (r.conclusion === "success") return { cl: "ok", testo: "riuscito" };
+  if (r.conclusion === "cancelled") return { cl: "warn", testo: "annullato" };
+  return { cl: "ko", testo: "fallito" };
+}
+
+async function controlla(app) {
+  const out = { app, righe: [], msg: [], stato: "ok" };
+  const peggio = (s) => { const o = { ok: 0, idle: 1, warn: 2, ko: 3 }; if (o[s] > o[out.stato]) out.stato = s; };
+
+  const [ind, run, ztl, rel] = await Promise.allSettled([
+    json(SITO + app.id + "/" + app.indice),
+    giri(app.id),
+    app.ztl ? json(SITO + app.id + "/" + app.ztl) : Promise.resolve(null),
+    app.pianoB ? json(API + app.id + "/releases/tags/dati-mimit") : Promise.resolve(null),
+  ]);
+
+  // 1. Data dei dati pubblicati
+  let dataDati = null;
+  if (ind.status === "fulfilled") {
+    const i = ind.value;
+    if (app.id === "Parking") {
+      const date = Object.values(i.zone || {}).map((z) => z.aggiornato).filter(Boolean).sort();
+      dataDati = date[0] || null;
+      const vecchie = Object.entries(i.zone || {}).filter(([, z]) => !z.aggiornato ||
+        Date.now() - new Date(z.aggiornato) > app.massimo).map(([n]) => n);
+      out.righe.push(["Parcheggi", date.length ? quando(date[0]) + " (" + date.length + " zone)" : "—"]);
+      if (vecchie.length) { peggio("warn"); out.msg.push("Zone non aggiornate: " + vecchie.join(", ")); }
+    } else if (app.id === "Distributori") {
+      dataDati = i.aggiornato;
+      const ieri = giornoRoma(new Date(Date.now() - GIORNO));
+      out.righe.push(["Prezzi del", i.estrazione ? fmtGiorno.format(new Date(i.estrazione + "T12:00:00Z")) : "—"]);
+      out.righe.push(["Pubblicati", quando(i.aggiornato)]);
+      if (!i.estrazione || i.estrazione < ieri) { peggio("warn"); out.msg.push("Prezzi vecchi: il MIMIT e il piano B non hanno portato dati nuovi."); }
+    } else {
+      dataDati = i.aggiornato;
+      out.righe.push(["Dati del", quando(i.aggiornato) + " · " + fa(i.aggiornato)]);
+    }
+    if (app.massimo && dataDati && Date.now() - new Date(dataDati) > app.massimo) {
+      peggio("warn"); out.msg.push("Dati più vecchi del previsto (" + app.ritmo + ").");
+    }
+  } else {
+    peggio("ko"); out.righe.push(["Dati", "non letti"]);
+    out.msg.push("Non riesco a leggere " + app.indice + " del sito.");
+  }
+
+  if (app.ztl) {
+    if (ztl.status === "fulfilled" && ztl.value) {
+      out.righe.push(["ZTL", quando(ztl.value.aggiornato)]);
+      if (Date.now() - new Date(ztl.value.aggiornato) > app.massimo) { peggio("warn"); out.msg.push("ZTL non aggiornate."); }
+    } else out.righe.push(["ZTL", "non lette"]);
+  }
+
+  // 2. Ultimo giro su GitHub
+  if (run.status === "fulfilled") {
+    const r = run.value.scarico, e = esitoGiro(r);
+    out.giro = r ? "Ultimo giro " + quando(r.created_at) + ": " + e.testo : "Nessun giro programmato trovato";
+    out.linkGiro = r ? r.html_url : null;
+    if (e.cl === "ko") { peggio("ko"); out.msg.push("L'ultimo scaricamento su GitHub è fallito."); }
+    else if (e.cl === "warn") peggio("warn");
+    out.manuali = run.value.manuali;
+  } else {
+    out.giro = run.reason && run.reason.status === 403 ? "GitHub: troppe richieste, riprova tra poco" : "Esito su GitHub non letto";
+  }
+
+  // 3. Piano B dal computer (solo Distributori)
+  if (app.pianoB) {
+    if (rel.status === "fulfilled" && rel.value) {
+      const csv = (rel.value.assets || []).map((a) => a.updated_at).sort().pop();
+      out.righe.push(["Piano B (PC)", csv ? "ultimo invio " + quando(csv) : "mai usato"]);
+    } else {
+      out.righe.push(["Piano B (PC)", rel.reason && rel.reason.status === 404 ? "mai usato" : "non letto"]);
+    }
+  }
+  return out;
+}
+
+const ETICHETTA = { ok: "Tutto ok", warn: "Da controllare", ko: "Problema", idle: "In attesa" };
+
+function scheda(r) {
+  const a = r.app;
+  return `<article class="app s-${r.stato}">
+    <div class="testa"><h2>${esc(a.nome)}</h2><span class="stato ${r.stato}">${ETICHETTA[r.stato]}</span></div>
+    <div class="giro">${esc(a.cosa)} · ${esc(a.ritmo)}</div>
+    <dl>${r.righe.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${r.giro ? `<div class="msg">${r.linkGiro ? `<a href="${esc(r.linkGiro)}">${esc(r.giro)}</a>` : esc(r.giro)}</div>` : ""}
+    ${r.msg.map((m) => `<div class="msg ${r.stato}" style="padding:4px 8px;border-radius:6px">${esc(m)}</div>`).join("")}
+    <div class="link">
+      <a href="${SITO}${a.id}/">Apri l'app</a>
+      <a href="https://github.com/${UTENTE}/${a.id}/actions/workflows/pubblica.yml">Rilancia lo scaricamento</a>
+    </div>
+  </article>`;
+}
+
+function schedaScontrini() {
+  return `<article class="app s-idle">
+    <div class="testa"><h2>Qui-Scontrini</h2><span class="stato idle">Da collegare</span></div>
+    <div class="giro">Cose da fare a mano</div>
+    <div class="msg">Da aggiungere quando avremo il repository o l'indirizzo dell'app.</div>
+  </article>`;
+}
+
+async function aggiorna() {
+  const btn = document.getElementById("ricarica");
+  btn.disabled = true; btn.textContent = "Controllo…";
+  const risultati = await Promise.all(APP.map((a) => controlla(a).catch((e) =>
+    ({ app: a, righe: [], msg: ["Errore: " + e.message], stato: "ko" }))));
+  document.getElementById("griglia").innerHTML = risultati.map(scheda).join("") + schedaScontrini();
+  const conta = { ok: 0, warn: 0, ko: 0, idle: 0 };
+  risultati.forEach((r) => conta[r.stato]++);
+  document.getElementById("riepilogo").innerHTML = ["ko", "warn", "ok"].filter((k) => conta[k])
+    .map((k) => `<span class="pill ${k}">${conta[k]} ${ETICHETTA[k].toLowerCase()}</span>`).join("");
+  document.getElementById("quando").textContent = "Controllato " + fmt.format(new Date());
+  btn.disabled = false; btn.textContent = "Aggiorna";
+}
+
+document.getElementById("ricarica").addEventListener("click", aggiorna);
+aggiorna();
+setInterval(aggiorna, 15 * 60e3);
+</script>
+</body>
+</html>
