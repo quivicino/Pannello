@@ -193,7 +193,17 @@ async function controlla(app) {
   if (app.pianoB) {
     if (rel.status === "fulfilled" && rel.value) {
       const csv = (rel.value.assets || []).map((a) => a.updated_at).sort().pop();
-      out.righe.push(["Piano B (PC)", csv ? "ultimo invio " + quando(csv) : "mai usato"]);
+      // Riga scritta da pc/scarica_mimit.ps1 a ogni giro: "pc-controllo: 2026-11-04T11:00:00Z | ok | testo"
+      const m = /^pc-controllo:\s*(\S+)\s*\|\s*(\w+)\s*\|\s*(.*)$/m.exec(rel.value.body || "");
+      if (m) {
+        const [, ora, esito, testo] = m;
+        out.righe.push(["Piano B (PC)", "controllo " + quando(ora) + ": " + (esito === "ok" ? "ok" : "errore")]);
+        if (esito !== "ok") { peggio("warn"); out.msg.push("Piano B sul PC: " + testo); }
+        else if (Date.now() - new Date(ora) > 30 * ORA) { peggio("warn"); out.msg.push("Il piano B sul PC non gira da più di un giorno (PC spento?)."); }
+      } else {
+        out.righe.push(["Piano B (PC)", "esito non ancora disponibile"]);
+      }
+      out.righe.push(["Ultimo invio PC", csv ? quando(csv) : "mai"]);
     } else {
       out.righe.push(["Piano B (PC)", rel.reason && rel.reason.status === 404 ? "mai usato" : "non letto"]);
     }
@@ -218,20 +228,12 @@ function scheda(r) {
   </article>`;
 }
 
-function schedaScontrini() {
-  return `<article class="app s-idle">
-    <div class="testa"><h2>Qui-Scontrini</h2><span class="stato idle">Da collegare</span></div>
-    <div class="giro">Cose da fare a mano</div>
-    <div class="msg">Da aggiungere quando avremo il repository o l'indirizzo dell'app.</div>
-  </article>`;
-}
-
 async function aggiorna() {
   const btn = document.getElementById("ricarica");
   btn.disabled = true; btn.textContent = "Controllo…";
   const risultati = await Promise.all(APP.map((a) => controlla(a).catch((e) =>
     ({ app: a, righe: [], msg: ["Errore: " + e.message], stato: "ko" }))));
-  document.getElementById("griglia").innerHTML = risultati.map(scheda).join("") + schedaScontrini();
+  document.getElementById("griglia").innerHTML = risultati.map(scheda).join("");
   const conta = { ok: 0, warn: 0, ko: 0, idle: 0 };
   risultati.forEach((r) => conta[r.stato]++);
   document.getElementById("riepilogo").innerHTML = ["ko", "warn", "ok"].filter((k) => conta[k])
