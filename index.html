@@ -96,7 +96,13 @@ const fmt = new Intl.DateTimeFormat("it-IT", { timeZone: "Europe/Rome", weekday:
   month: "short", hour: "2-digit", minute: "2-digit" });
 const fmtGiorno = new Intl.DateTimeFormat("it-IT", { timeZone: "Europe/Rome", weekday: "short", day: "numeric", month: "short" });
 const giornoRoma = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" }).format(d);
-const quando = (iso) => iso ? fmt.format(new Date(iso)) : "—";
+// Data valida o null. Accetta anche l'ora con i punti (12.00.50) che Windows in italiano scrive al posto dei due punti.
+function data(iso) {
+  if (!iso) return null;
+  const d = new Date(String(iso).replace(/T(\d{2})\.(\d{2})\.(\d{2})/, "T$1:$2:$3"));
+  return isNaN(d) ? null : d;
+}
+const quando = (iso) => { const d = data(iso); return d ? fmt.format(d) : (iso ? String(iso) : "—"); };
 function fa(iso) {
   if (!iso) return "";
   const ms = Date.now() - new Date(iso).getTime();
@@ -155,7 +161,7 @@ async function controlla(app) {
     } else if (app.id === "Distributori") {
       dataDati = i.aggiornato;
       const ieri = giornoRoma(new Date(Date.now() - GIORNO));
-      out.righe.push(["Prezzi del", i.estrazione ? fmtGiorno.format(new Date(i.estrazione + "T12:00:00Z")) : "—"]);
+      out.righe.push(["Prezzi del", data(i.estrazione + "T12:00:00Z") ? fmtGiorno.format(data(i.estrazione + "T12:00:00Z")) : (i.estrazione || "—")]);
       out.righe.push(["Pubblicati", quando(i.aggiornato)]);
       if (!i.estrazione || i.estrazione < ieri) { peggio("warn"); out.msg.push("Prezzi vecchi: il MIMIT e il piano B non hanno portato dati nuovi."); }
     } else {
@@ -196,10 +202,11 @@ async function controlla(app) {
       // Riga scritta da pc/scarica_mimit.ps1 a ogni giro: "pc-controllo: 2026-11-04T11:00:00Z | ok | testo"
       const m = /^pc-controllo:\s*(\S+)\s*\|\s*(\w+)\s*\|\s*(.*)$/m.exec(rel.value.body || "");
       if (m) {
-        const [, ora, esito, testo] = m;
-        out.righe.push(["Piano B (PC)", "controllo " + quando(ora) + ": " + (esito === "ok" ? "ok" : "errore")]);
+        const [, oraTesto, esito, testo] = m;
+        const ora = data(oraTesto);
+        out.righe.push(["Piano B (PC)", "controllo " + quando(oraTesto) + ": " + (esito === "ok" ? "ok" : "errore")]);
         if (esito !== "ok") { peggio("warn"); out.msg.push("Piano B sul PC: " + testo); }
-        else if (Date.now() - new Date(ora) > 30 * ORA) { peggio("warn"); out.msg.push("Il piano B sul PC non gira da più di un giorno (PC spento?)."); }
+        else if (!ora || Date.now() - ora > 30 * ORA) { peggio("warn"); out.msg.push("Il piano B sul PC non gira da più di un giorno (PC spento?)."); }
       } else {
         out.righe.push(["Piano B (PC)", "esito non ancora disponibile"]);
       }
