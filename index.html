@@ -61,10 +61,12 @@
     <button id="ricarica" type="button">Aggiorna</button>
   </header>
   <div class="riepilogo" id="riepilogo"></div>
+  <p class="agg" id="totale"></p>
   <div class="griglia" id="griglia"></div>
   <footer>
     Le date sono in ora italiana. Il pannello legge i dati pubblicati da ogni app (dati/indice.json) e l'esito
-    dell'ultimo scaricamento su GitHub Actions. Si aggiorna da solo ogni 15 minuti.
+    dell'ultimo scaricamento su GitHub Actions. Si aggiorna da solo ogni 15 minuti; lo spazio occupato ogni 6 ore.
+    "Sito" è la dimensione dell'ultima pubblicazione su GitHub Pages (limite 1 GB).
   </footer>
 </main>
 <script>
@@ -87,6 +89,8 @@ const APP = [
   { id: "Salus", nome: "Qui-Salus", cosa: "Servizi sanitari (OpenStreetMap)", ritmo: "ogni giorno",
     indice: "dati/indice.json", massimo: 30 * ORA },
   { id: "Trekking", nome: "Qui-Trekking", cosa: "Sentieri della Lombardia (OSM)", ritmo: "ogni lunedì",
+    indice: "dati/indice.json", massimo: 8 * GIORNO },
+  { id: "Bike", nome: "Qui-Bike", cosa: "Percorsi MTB e gravel della Lombardia (OSM)", ritmo: "ogni lunedì",
     indice: "dati/indice.json", massimo: 8 * GIORNO },
   { id: "Parking", nome: "Qui-Parking", cosa: "Parcheggi e ZTL della Lombardia", ritmo: "ogni lunedì",
     indice: "osm/indice.json", ztl: "ztl.json", massimo: 8 * GIORNO },
@@ -112,6 +116,26 @@ function fa(iso) {
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// Spazio su GitHub: cambia poco, quindi lo rileggo al massimo ogni 6 ore (l'API pubblica concede 60 richieste l'ora).
+const LIMITE_MB = 1024, AVVISO_MB = 800;   // GitHub: repository consigliato sotto 1 GB, sito Pages al massimo 1 GB
+const mb = (byte) => byte == null ? "—" : (byte / 1048576).toLocaleString("it-IT", { maximumFractionDigits: byte < 10485760 ? 1 : 0 }) + " MB";
+async function spazio() {
+  const CHIAVE = "pannello-spazio", ETA = 6 * ORA;
+  try { const c = JSON.parse(localStorage.getItem(CHIAVE)); if (c && Date.now() - c.t < ETA) return c.d; } catch (e) { /* niente cache */ }
+  const d = {};
+  const repo = await json("https://api.github.com/users/" + UTENTE + "/repos?per_page=100");
+  repo.forEach((r) => { d[r.name] = { repo: r.size * 1024 }; });
+  await Promise.all(APP.map(async (a) => {
+    try {
+      const art = await json(API + a.id + "/actions/artifacts?name=github-pages&per_page=1");
+      const x = (art.artifacts || [])[0];
+      if (x) (d[a.id] = d[a.id] || {}).sito = x.size_in_bytes;
+    } catch (e) { /* resta senza */ }
+  }));
+  try { localStorage.setItem(CHIAVE, JSON.stringify({ t: Date.now(), d })); } catch (e) { /* niente cache */ }
+  return d;
+}
+
 async function json(url) {
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) { const e = new Error("HTTP " + r.status); e.status = r.status; throw e; }
@@ -136,7 +160,7 @@ function esitoGiro(r) {
   return { cl: "ko", testo: "fallito" };
 }
 
-async function controlla(app) {
+async function controlla(app, spazi) {
   const out = { app, righe: [], msg: [], stato: "ok" };
   const peggio = (s) => { const o = { ok: 0, idle: 1, warn: 2, ko: 3 }; if (o[s] > o[out.stato]) out.stato = s; };
 
@@ -215,6 +239,13 @@ async function controlla(app) {
       out.righe.push(["Piano B (PC)", rel.reason && rel.reason.status === 404 ? "mai usato" : "non letto"]);
     }
   }
+  // 4. Spazio occupato su GitHub
+  const sp = spazi && spazi[app.id];
+  if (sp) {
+    out.righe.push(["Spazio GitHub", "repository " + mb(sp.repo) + " · sito " + mb(sp.sito)]);
+    const grande = Math.max(sp.repo || 0, sp.sito || 0) / 1048576;
+    if (grande > AVVISO_MB) { peggio("warn"); out.msg.push("Spazio quasi esaurito: GitHub consente circa " + LIMITE_MB + " MB."); }
+  }
   return out;
 }
 
@@ -238,7 +269,8 @@ function scheda(r) {
 async function aggiorna() {
   const btn = document.getElementById("ricarica");
   btn.disabled = true; btn.textContent = "Controllo…";
-  const risultati = await Promise.all(APP.map((a) => controlla(a).catch((e) =>
+  const spazi = await spazio().catch(() => null);
+  const risultati = await Promise.all(APP.map((a) => controlla(a, spazi).catch((e) =>
     ({ app: a, righe: [], msg: ["Errore: " + e.message], stato: "ko" }))));
   document.getElementById("griglia").innerHTML = risultati.map(scheda).join("");
   const conta = { ok: 0, warn: 0, ko: 0, idle: 0 };
@@ -246,6 +278,11 @@ async function aggiorna() {
   document.getElementById("riepilogo").innerHTML = ["ko", "warn", "ok"].filter((k) => conta[k])
     .map((k) => `<span class="pill ${k}">${conta[k]} ${ETICHETTA[k].toLowerCase()}</span>`).join("");
   document.getElementById("quando").textContent = "Controllato " + fmt.format(new Date());
+  if (spazi) {
+    let repo = 0, sito = 0;
+    APP.forEach((a) => { const x = spazi[a.id] || {}; repo += x.repo || 0; sito += x.sito || 0; });
+    document.getElementById("totale").textContent = "Spazio totale su GitHub: repository " + mb(repo) + " · siti " + mb(sito);
+  }
   btn.disabled = false; btn.textContent = "Aggiorna";
 }
 
